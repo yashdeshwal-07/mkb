@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "author": "Yash Deshwal",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 65.54, "left": -92.3, "attrs": {} },
+    {
+      "type": "wokwi-rgb-led",
+      "id": "rgb1",
+      "top": 71.2,
+      "left": 260.3,
+      "rotate": 90,
+      "attrs": { "common": "cathode" }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz1",
+      "top": 2.4,
+      "left": 136.2,
+      "attrs": { "volume": "0.1" }
+    },
+    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": -50, "left": 332, "attrs": {} },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": -15.25,
+      "left": -48,
+      "attrs": { "value": "330" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r2",
+      "top": -53.65,
+      "left": -48,
+      "attrs": { "value": "330" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r3",
+      "top": -34.45,
+      "left": -48,
+      "attrs": { "value": "330" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd2",
+      "top": -204.8,
+      "left": 303.2,
+      "attrs": { "pins": "i2c" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "rgb1:COM", "esp:GND.2", "black", [ "v-8.7", "h-255.34" ] ],
+    [ "bz1:1", "esp:GND.2", "black", [ "v0" ] ],
+    [ "bz1:2", "esp:18", "red", [ "v0" ] ],
+    [ "keypad1:R1", "esp:13", "gold", [ "v9.6", "h-643.2", "v-105.6" ] ],
+    [ "keypad1:R3", "esp:14", "gold", [ "v28.8", "h-681.9", "v-153.6" ] ],
+    [ "keypad1:R4", "esp:33", "gold", [ "v38.4", "h-633.8", "v-201.6" ] ],
+    [ "keypad1:C1", "esp:32", "cyan", [ "v48", "h-633.7", "v-220.8" ] ],
+    [ "keypad1:C2", "esp:19", "cyan", [ "v57.6", "h-384", "v-220.8" ] ],
+    [ "keypad1:C3", "esp:23", "cyan", [ "v67.2", "h-384.15", "v-268.8" ] ],
+    [ "keypad1:C4", "esp:5", "cyan", [ "v76.8", "h-384.3", "v-220.8" ] ],
+    [ "keypad1:R2", "esp:4", "gold", [ "v19.2", "h-317.2", "v-134.4" ] ],
+    [ "rgb1:R", "r1:2", "red", [ "h-5", "v-104.8" ] ],
+    [ "r1:1", "esp:25", "red", [ "v0", "h-57.6", "v211.2" ] ],
+    [ "rgb1:G", "r3:2", "green", [ "v0" ] ],
+    [ "r3:1", "esp:26", "green", [ "v0", "h-67.2", "v220.8" ] ],
+    [ "rgb1:B", "r2:2", "blue", [ "h-24.2", "v-170.4" ] ],
+    [ "r2:1", "esp:27", "blue", [ "v0", "h-76.8", "v201.6" ] ],
+    [ "lcd2:GND", "esp:GND.2", "black", [ "h-259.2", "v268.8" ] ],
+    [ "lcd2:VCC", "esp:5V", "red", [ "h-460.8", "v432.1" ] ],
+    [ "lcd2:SDA", "esp:21", "green", [ "h-249.6", "v288.2" ] ],
+    [ "lcd2:SCL", "esp:22", "green", [ "h-240", "v259.5" ] ]
+  ],
+  "dependencies": {}
+}
