@@ -1,4 +1,4 @@
-#include <state_machine.h>
+#include <state_manager.h>
 #include <config.h>
 #include <Arduino.h>
 StateMachine::StateMachine(
@@ -8,7 +8,7 @@ StateMachine::StateMachine(
     this->inputManager = inputManager;
     this->validator = validator;
 
-    currentState = IDLE;
+    currentState = S_IDLE;
     failCount = 0;
     currentRole = "";
     lockoutStartTime = 0;
@@ -26,7 +26,7 @@ String StateMachine::getCurrentRole() const
 
 void StateMachine::reset()
 {
-    currentState = IDLE;
+    currentState = S_IDLE;
     currentRole = "";
     inputManager->clear();
 }
@@ -37,7 +37,7 @@ void StateMachine::grantAccess(const String &role)
 
     failCount = 0;
 
-    currentState = GRANTED;
+    currentState = S_GRANTED;
 
     inputManager->clear();
 }
@@ -50,12 +50,12 @@ void StateMachine::denyAccess()
 
     if (failCount >= FAIL_SAFE_COUNTER)
     {
-        currentState = LOCKED;
+        currentState = S_LOCKED;
         lockoutStartTime = millis();
     }
     else
     {
-        currentState = DENIED;
+        currentState = S_DENIED;
     }
 }
 
@@ -77,7 +77,7 @@ void StateMachine::validateCurrentInput()
 
 void StateMachine::handleKey(char key)
 {
-    if (currentState == LOCKED)
+    if (currentState == S_LOCKED)
     {
         return;
     }
@@ -90,7 +90,7 @@ void StateMachine::handleKey(char key)
 
     if (key == '#')
     {
-        currentState = VALIDATING;
+        currentState = S_VALIDATING;
         validateCurrentInput();
         return;
     }
@@ -98,13 +98,13 @@ void StateMachine::handleKey(char key)
     if (key >= '0' && key <= '9')
     {
         inputManager->addKey(key);
-        currentState = IDLE;
+        currentState = S_IDLE;
         return;
     }
 }
 void StateMachine::update()
 {
-    if (currentState == LOCKED)
+    if (currentState == S_LOCKED)
     {
         if (millis() - lockoutStartTime >= LOCKOUT_TIME)
         {

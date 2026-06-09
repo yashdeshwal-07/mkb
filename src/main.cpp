@@ -74,14 +74,14 @@ void loop()
 
   switch (stateMachine.getState())
   {
-  case IDLE:
+  case S_IDLE:
 
     displayManager.showInput(
         inputManager.length());
 
     break;
 
-  case GRANTED:
+  case S_GRANTED:
 
     displayManager.showGranted(
         stateMachine.getCurrentRole());
@@ -98,7 +98,7 @@ void loop()
 
     break;
 
-  case DENIED:
+  case S_DENIED:
 
     displayManager.showDenied();
 
@@ -114,7 +114,7 @@ void loop()
 
     break;
 
-  case LOCKED:
+  case S_LOCKED:
 
     displayManager.showLocked();
 
@@ -122,7 +122,7 @@ void loop()
 
     break;
 
-  case VALIDATING:
+  case S_VALIDATING:
     break;
   }
 }

@@ -1,4 +1,4 @@
-#include "display_manager.h"
+#include <display_manager.h>
 
 DisplayManager::DisplayManager(
     LiquidCrystal_I2C *lcd)

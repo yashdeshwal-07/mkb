@@ -6,11 +6,11 @@
 
 enum SystemState
 {
-    IDLE,
-    VALIDATING,
-    GRANTED,
-    DENIED,
-    LOCKED
+    S_IDLE,
+    S_VALIDATING,
+    S_GRANTED,
+    S_DENIED,
+    S_LOCKED
 };
 
 class StateMachine
