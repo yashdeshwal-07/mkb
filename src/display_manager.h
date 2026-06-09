@@ -7,6 +7,18 @@ class DisplayManager
 {
 private:
     LiquidCrystal_I2C *lcd;
+    int lastInputLength;
+    int lastLockedSeconds;
+    enum DisplayScreen
+    {
+        DS_NONE = 0,
+        DS_WELCOME,
+        DS_INPUT,
+        DS_GRANTED,
+        DS_DENIED,
+        DS_LOCKED
+    };
+    DisplayScreen lastScreen;
 
 public:
     DisplayManager(LiquidCrystal_I2C *lcd);
@@ -19,7 +31,7 @@ public:
 
     void showDenied();
 
-    void showLocked();
+    void showLocked(unsigned long remainingSeconds);
 
     void clear();
 };

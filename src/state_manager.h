@@ -40,6 +40,7 @@ public:
 
     SystemState getState() const;
     String getCurrentRole() const;
+    unsigned long getLockoutRemainingSeconds() const;
 
     void reset();
 };

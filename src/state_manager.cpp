@@ -24,6 +24,23 @@ String StateMachine::getCurrentRole() const
     return currentRole;
 }
 
+unsigned long StateMachine::getLockoutRemainingSeconds() const
+{
+    if (currentState != S_LOCKED)
+    {
+        return 0;
+    }
+
+    unsigned long elapsed = millis() - lockoutStartTime;
+    if (elapsed >= LOCKOUT_TIME)
+    {
+        return 0;
+    }
+
+    unsigned long remainingMillis = LOCKOUT_TIME - elapsed;
+    return (remainingMillis + 999) / 1000;
+}
+
 void StateMachine::reset()
 {
     currentState = S_IDLE;

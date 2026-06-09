@@ -116,7 +116,8 @@ void loop()
 
   case S_LOCKED:
 
-    displayManager.showLocked();
+    displayManager.showLocked(
+        stateMachine.getLockoutRemainingSeconds());
 
     feedback.locked();
 
