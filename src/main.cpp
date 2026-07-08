@@ -1,6 +1,10 @@
 #include <Arduino.h>
 #include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <time.h>
 #include <Wire.h>
 
 // -----------------------------------------------------------------------------
@@ -10,6 +14,32 @@
 const int MAX_ID_LENGTH = 4;
 const int FAIL_SAFE_COUNTER = 3;
 const unsigned long LOCKOUT_TIME = 15000;
+const unsigned long RESULT_SCREEN_TIME = 2000;
+const unsigned long SUCCESS_BUZZ_TIME = 200;
+const unsigned long DENIED_BEEP_ON_TIME = 100;
+const unsigned long DENIED_BEEP_OFF_TIME = 100;
+const unsigned long LOCKED_BEEP_PERIOD = 1000;
+const unsigned long LOCKED_BEEP_ON_TIME = 100;
+const unsigned long WIFI_RECONNECT_INTERVAL = 10000;
+const unsigned long TIME_CACHE_REFRESH_INTERVAL = 1000;
+
+// WiFi
+#ifndef WIFI_SSID
+#define WIFI_SSID "Wokwi-GUEST"
+#endif
+
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD ""
+#endif
+
+// Time / logging
+const char *NTP_SERVER = "pool.ntp.org";
+const long GMT_OFFSET_SECONDS = 0;
+const int DAYLIGHT_OFFSET_SECONDS = 0;
+
+#ifndef ACCESS_LOG_URL
+#define ACCESS_LOG_URL "http://192.168.1.100:8080/access-log"
+#endif
 
 // RGB LED
 const byte RED_PIN = 25;
@@ -75,10 +105,22 @@ Keypad keypad(
     COLS);
 
 // -----------------------------------------------------------------------------
+// Forward Declarations for Phase 2 Helpers
+// -----------------------------------------------------------------------------
+
+bool isWiFiConnected();
+void initTime();
+void updateTimeCache();
+String getCurrentTime();
+void logAccess(const String &id, const String &role, const String &status);
+void flushOfflineQueue();
+
+// -----------------------------------------------------------------------------
 // Global Input Buffer Helpers
 // -----------------------------------------------------------------------------
 
 String inputBuffer;
+unsigned long lastInputTime = 0;
 
 void clearInputBuffer()
 {
@@ -98,6 +140,7 @@ void addKeyToInputBuffer(char key)
   }
 
   inputBuffer += key;
+  lastInputTime = millis();
 }
 
 void backspaceInputBuffer()
@@ -105,6 +148,7 @@ void backspaceInputBuffer()
   if (inputBuffer.length() != 0)
   {
     inputBuffer.remove(inputBuffer.length() - 1);
+    lastInputTime = millis();
   }
 }
 
@@ -133,6 +177,311 @@ String validateAccess(const String &id)
   }
 
   return "";
+}
+
+// -----------------------------------------------------------------------------
+// WiFi Helpers
+// -----------------------------------------------------------------------------
+
+unsigned long lastWiFiReconnectAttempt = 0;
+bool wifiWasConnected = false;
+
+void connectWiFi()
+{
+  if (isWiFiConnected())
+  {
+    return;
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
+
+  Serial.print("[WiFi] Connecting to ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  lastWiFiReconnectAttempt = millis();
+}
+
+void reconnectWiFi()
+{
+  if (isWiFiConnected())
+  {
+    return;
+  }
+
+  if (millis() - lastWiFiReconnectAttempt < WIFI_RECONNECT_INTERVAL)
+  {
+    return;
+  }
+
+  Serial.println("[WiFi] Reconnecting...");
+  connectWiFi();
+}
+
+bool isWiFiConnected()
+{
+  return WiFi.status() == WL_CONNECTED;
+}
+
+void updateWiFiStatus()
+{
+  bool connected = isWiFiConnected();
+
+  if (connected == wifiWasConnected)
+  {
+    return;
+  }
+
+  wifiWasConnected = connected;
+
+  if (connected)
+  {
+    Serial.print("[WiFi] Connected. IP: ");
+    Serial.println(WiFi.localIP());
+  }
+  else
+  {
+    Serial.println("[WiFi] Disconnected");
+  }
+}
+
+// -----------------------------------------------------------------------------
+// NTP Time Helpers
+// -----------------------------------------------------------------------------
+
+bool timeConfigured = false;
+bool timeCacheReady = false;
+unsigned long lastTimeCacheRefresh = 0;
+time_t currentEpoch = 0;
+String currentDateTime = "TIME_NOT_SYNCED";
+
+void initTime()
+{
+  if (timeConfigured)
+  {
+    return;
+  }
+
+  configTime(GMT_OFFSET_SECONDS, DAYLIGHT_OFFSET_SECONDS, NTP_SERVER);
+  timeConfigured = true;
+
+  Serial.println("[NTP] Time synchronization requested");
+}
+
+void updateTimeCache()
+{
+  if (!timeConfigured)
+  {
+    return;
+  }
+
+  if (millis() - lastTimeCacheRefresh < TIME_CACHE_REFRESH_INTERVAL && timeCacheReady)
+  {
+    return;
+  }
+
+  time_t now = time(nullptr);
+  if (now < 100000)
+  {
+    return;
+  }
+
+  struct tm timeInfo;
+  localtime_r(&now, &timeInfo);
+
+  char buffer[20];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeInfo);
+
+  currentEpoch = now;
+  currentDateTime = buffer;
+  lastTimeCacheRefresh = millis();
+  timeCacheReady = true;
+}
+
+String getCurrentTime()
+{
+  updateTimeCache();
+  return currentDateTime;
+}
+
+// -----------------------------------------------------------------------------
+// HTTP Access Log Helpers
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Offline Queue & Sending Helpers
+// -----------------------------------------------------------------------------
+
+struct LogEntry
+{
+  String id;
+  String role;
+  String status;
+  String timestamp;
+};
+
+const int MAX_QUEUE_SIZE = 10;
+LogEntry offlineQueue[MAX_QUEUE_SIZE];
+int queueHead = 0;
+int queueTail = 0;
+int queueCount = 0;
+
+unsigned long lastFlushAttempt = 0;
+const unsigned long FLUSH_INTERVAL = 10000; // 10 seconds
+
+void enqueueLog(const String &id, const String &role, const String &status, const String &timestamp)
+{
+  if (queueCount >= MAX_QUEUE_SIZE)
+  {
+    Serial.println("[Queue] Queue full, overwriting oldest entry");
+    queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
+    queueCount--;
+  }
+
+  offlineQueue[queueTail] = {id, role, status, timestamp};
+  queueTail = (queueTail + 1) % MAX_QUEUE_SIZE;
+  queueCount++;
+  Serial.print("[Queue] Log enqueued. Count: ");
+  Serial.println(queueCount);
+}
+
+bool peekLog(LogEntry &entry)
+{
+  if (queueCount == 0)
+  {
+    return false;
+  }
+  entry = offlineQueue[queueHead];
+  return true;
+}
+
+void popLog()
+{
+  if (queueCount == 0)
+  {
+    return;
+  }
+  queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
+  queueCount--;
+  Serial.print("[Queue] Log popped. Count: ");
+  Serial.println(queueCount);
+}
+
+bool sendPayload(const String &id, const String &role, const String &status, const String &timestamp)
+{
+  if (!isWiFiConnected())
+  {
+    return false;
+  }
+
+  JsonDocument doc;
+  doc["id"] = id;
+  doc["role"] = role;
+  doc["status"] = status;
+  doc["time"] = timestamp;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  WiFiClient client;
+  HTTPClient http;
+  http.setTimeout(1500);
+
+  if (!http.begin(client, ACCESS_LOG_URL))
+  {
+    Serial.println("[HTTP] Failed to initialize request");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+
+  int httpCode = http.POST(payload);
+  bool success = false;
+  if (httpCode >= 200 && httpCode < 300)
+  {
+    Serial.print("[HTTP] Log sent successfully, code: ");
+    Serial.println(httpCode);
+    success = true;
+  }
+  else
+  {
+    Serial.print("[HTTP] Log send failed, code/error: ");
+    if (httpCode > 0)
+    {
+      Serial.println(httpCode);
+    }
+    else
+    {
+      Serial.println(http.errorToString(httpCode));
+    }
+  }
+
+  http.end();
+  return success;
+}
+
+void logAccess(const String &id, const String &role, const String &status)
+{
+  String timestamp = getCurrentTime();
+
+  if (queueCount == 0 && isWiFiConnected())
+  {
+    Serial.println("[Logging] Queue empty, attempting immediate send");
+    if (sendPayload(id, role, status, timestamp))
+    {
+      return;
+    }
+    Serial.println("[Logging] Immediate send failed, queueing log");
+  }
+  else
+  {
+    Serial.println("[Logging] WiFi offline or queue not empty, queueing log");
+  }
+
+  enqueueLog(id, role, status, timestamp);
+}
+
+void flushOfflineQueue()
+{
+  if (queueCount == 0)
+  {
+    return;
+  }
+
+  if (!isWiFiConnected())
+  {
+    return;
+  }
+
+  if (millis() - lastFlushAttempt < FLUSH_INTERVAL)
+  {
+    return;
+  }
+
+  lastFlushAttempt = millis();
+
+  Serial.print("[Queue] Flushing ");
+  Serial.print(queueCount);
+  Serial.println(" logs...");
+
+  while (queueCount > 0 && isWiFiConnected())
+  {
+    LogEntry entry;
+    if (peekLog(entry))
+    {
+      if (sendPayload(entry.id, entry.role, entry.status, entry.timestamp))
+      {
+        popLog();
+      }
+      else
+      {
+        Serial.println("[Queue] Send failed during flush, aborting flush");
+        break;
+      }
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -275,6 +624,13 @@ void showLocked(unsigned long remainingSeconds)
 }
 
 // -----------------------------------------------------------------------------
+// Global State Timers
+// -----------------------------------------------------------------------------
+
+unsigned long currentStateEntryTime = 0;
+unsigned long lockoutStartTime = 0;
+
+// -----------------------------------------------------------------------------
 // Feedback Helpers
 // -----------------------------------------------------------------------------
 
@@ -288,39 +644,51 @@ void feedbackOff()
 
 void feedbackSuccess()
 {
+  unsigned long elapsed = millis() - currentStateEntryTime;
+
   digitalWrite(RED_PIN, LOW);
   digitalWrite(GREEN_PIN, HIGH);
   digitalWrite(BLUE_PIN, LOW);
 
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(150);
-  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(BUZZER_PIN, elapsed < SUCCESS_BUZZ_TIME ? HIGH : LOW);
 }
 
 void feedbackDenied()
 {
+  unsigned long elapsed = millis() - currentStateEntryTime;
+
   digitalWrite(GREEN_PIN, LOW);
   digitalWrite(BLUE_PIN, LOW);
   digitalWrite(RED_PIN, HIGH);
 
-  for (int i = 0; i < 2; i++)
+  if (elapsed < DENIED_BEEP_ON_TIME)
   {
     digitalWrite(BUZZER_PIN, HIGH);
-    delay(100);
+  }
+  else if (elapsed < DENIED_BEEP_ON_TIME + DENIED_BEEP_OFF_TIME)
+  {
     digitalWrite(BUZZER_PIN, LOW);
-    delay(100);
+  }
+  else if (elapsed < (DENIED_BEEP_ON_TIME * 2) + DENIED_BEEP_OFF_TIME)
+  {
+    digitalWrite(BUZZER_PIN, HIGH);
+  }
+  else
+  {
+    digitalWrite(BUZZER_PIN, LOW);
   }
 }
 
 void feedbackLocked()
 {
+  unsigned long elapsed = millis() - lockoutStartTime;
+  unsigned long beepTime = elapsed % LOCKED_BEEP_PERIOD;
+
   digitalWrite(GREEN_PIN, LOW);
   digitalWrite(BLUE_PIN, LOW);
   digitalWrite(RED_PIN, HIGH);
 
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(300);
-  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(BUZZER_PIN, beepTime < LOCKED_BEEP_ON_TIME ? HIGH : LOW);
 }
 
 void initFeedback()
@@ -347,12 +715,13 @@ enum SystemState
 SystemState currentState = S_IDLE;
 int failCount = 0;
 String currentRole = "";
-unsigned long lockoutStartTime = 0;
 
 void resetSystem()
 {
   currentState = S_IDLE;
   currentRole = "";
+  currentStateEntryTime = millis();
+  feedbackOff();
   clearInputBuffer();
 }
 
@@ -390,6 +759,9 @@ void grantAccess(const String &role)
   failCount = 0;
 
   currentState = S_GRANTED;
+  currentStateEntryTime = millis();
+
+  logAccess(getInputBuffer(), role, "GRANTED");
 
   clearInputBuffer();
 }
@@ -398,22 +770,28 @@ void denyAccess()
 {
   failCount++;
 
-  clearInputBuffer();
-
   if (failCount >= FAIL_SAFE_COUNTER)
   {
     currentState = S_LOCKED;
     lockoutStartTime = millis();
+    currentStateEntryTime = lockoutStartTime;
   }
   else
   {
     currentState = S_DENIED;
+    currentStateEntryTime = millis();
   }
+
+  logAccess(getInputBuffer(), "", "DENIED");
+
+  clearInputBuffer();
 }
 
 void validateCurrentInput()
 {
-  String role = validateAccess(getInputBuffer());
+  String id = getInputBuffer();
+
+  String role = validateAccess(id);
 
   if (role != "")
   {
@@ -440,6 +818,10 @@ void handleKey(char key)
 
   if (key == '#')
   {
+    if (getInputBufferLength() == 0)
+    {
+      return;
+    }
     currentState = S_VALIDATING;
     validateCurrentInput();
     return;
@@ -450,6 +832,17 @@ void handleKey(char key)
     addKeyToInputBuffer(key);
     currentState = S_IDLE;
     return;
+  }
+}
+
+void updateInputTimeout()
+{
+  if (!inputBuffer.isEmpty())
+  {
+    if (millis() - lastInputTime >= 10000)
+    {
+      clearInputBuffer();
+    }
   }
 }
 
@@ -480,12 +873,21 @@ void setup()
 
   initFeedback();
 
+  connectWiFi();
+  initTime();
+
   showWelcome();
 }
 
 void loop()
 {
+  reconnectWiFi();
+  updateWiFiStatus();
+  updateTimeCache();
+  flushOfflineQueue();
+
   updateStateMachine();
+  updateInputTimeout();
 
   char key = keypad.getKey();
 
@@ -507,26 +909,22 @@ void loop()
     showGranted(getCurrentRole());
     feedbackSuccess();
 
-    delay(2000);
-
-    feedbackOff();
-
-    resetSystem();
-
-    showWelcome();
+    if (millis() - currentStateEntryTime >= RESULT_SCREEN_TIME)
+    {
+      resetSystem();
+      showWelcome();
+    }
     break;
 
   case S_DENIED:
     showDenied();
     feedbackDenied();
 
-    delay(2000);
-
-    feedbackOff();
-
-    resetSystem();
-
-    showWelcome();
+    if (millis() - currentStateEntryTime >= RESULT_SCREEN_TIME)
+    {
+      resetSystem();
+      showWelcome();
+    }
     break;
 
   case S_LOCKED:
